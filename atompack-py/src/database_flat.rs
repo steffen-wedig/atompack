@@ -686,47 +686,50 @@ pub(super) fn get_molecules_flat_soa_impl<'py>(
                 Ok(())
             };
 
-            let results: Vec<atompack::Result<()>> = if use_mmap {
-                (0..n_mols)
-                    .into_par_iter()
-                    .map(|i| {
-                        let idx = indices[i];
-                        if compression == CompressionType::None {
-                            let shared = inner.get_shared_mmap_bytes(idx).ok_or_else(|| {
-                                invalid_data(format!("Missing mmap bytes for molecule {}", idx))
-                            })?;
-                            process_mol(i, shared.as_slice())
-                        } else {
-                            let compressed = inner.get_compressed_slice(idx).ok_or_else(|| {
-                                invalid_data(format!(
-                                    "Missing compressed bytes for molecule {}",
-                                    idx
-                                ))
-                            })?;
-                            let uncompressed_size =
-                                inner.uncompressed_size(idx).ok_or_else(|| {
-                                    invalid_data(format!(
-                                        "Missing uncompressed size for molecule {}",
-                                        idx
-                                    ))
-                                })? as usize;
-                            let decompressed = atompack::decompress_bytes(
-                                compressed,
-                                compression,
-                                Some(uncompressed_size),
-                            )?;
-                            process_mol(i, &decompressed)
-                        }
-                    })
-                    .collect()
-            } else {
-                let raw_bytes = raw_bytes_owned.expect("raw bytes must exist without mmap");
-                raw_bytes
-                    .par_iter()
-                    .enumerate()
-                    .map(|(i, bytes)| process_mol(i, bytes))
-                    .collect()
-            };
+            let results: Vec<atompack::Result<()>> = atompack::parallel::install(|| {
+                if use_mmap {
+                    (0..n_mols)
+                        .into_par_iter()
+                        .map(|i| {
+                            let idx = indices[i];
+                            if compression == CompressionType::None {
+                                let shared = inner.get_shared_mmap_bytes(idx).ok_or_else(|| {
+                                    invalid_data(format!("Missing mmap bytes for molecule {}", idx))
+                                })?;
+                                process_mol(i, shared.as_slice())
+                            } else {
+                                let compressed =
+                                    inner.get_compressed_slice(idx).ok_or_else(|| {
+                                        invalid_data(format!(
+                                            "Missing compressed bytes for molecule {}",
+                                            idx
+                                        ))
+                                    })?;
+                                let uncompressed_size =
+                                    inner.uncompressed_size(idx).ok_or_else(|| {
+                                        invalid_data(format!(
+                                            "Missing uncompressed size for molecule {}",
+                                            idx
+                                        ))
+                                    })? as usize;
+                                let decompressed = atompack::decompress_bytes(
+                                    compressed,
+                                    compression,
+                                    Some(uncompressed_size),
+                                )?;
+                                process_mol(i, &decompressed)
+                            }
+                        })
+                        .collect()
+                } else {
+                    let raw_bytes = raw_bytes_owned.expect("raw bytes must exist without mmap");
+                    raw_bytes
+                        .par_iter()
+                        .enumerate()
+                        .map(|(i, bytes)| process_mol(i, bytes))
+                        .collect()
+                }
+            });
             results.into_iter().collect::<atompack::Result<Vec<_>>>()?;
 
             Ok(Some((

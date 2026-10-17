@@ -10,6 +10,7 @@
 // Re-export main types
 pub mod atom;
 pub mod compression;
+pub mod parallel;
 pub mod storage;
 pub mod types;
 

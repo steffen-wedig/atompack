@@ -1005,11 +1005,13 @@ fn try_add_arrays_batch_fast_canonical(
 
     let records: Vec<(Vec<u8>, u32)> = if batch >= 1024 {
         use rayon::prelude::*;
-        (0..batch)
-            .into_par_iter()
-            .map(build_record)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(PyValueError::new_err)?
+        atompack::parallel::install(|| {
+            (0..batch)
+                .into_par_iter()
+                .map(build_record)
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(PyValueError::new_err)?
     } else {
         (0..batch)
             .map(build_record)
@@ -1510,11 +1512,13 @@ pub(super) fn add_arrays_batch_impl(
 
     let records: Vec<(Vec<u8>, u32)> = if batch >= 1024 {
         use rayon::prelude::*;
-        (0..batch)
-            .into_par_iter()
-            .map(build_record)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(PyValueError::new_err)?
+        atompack::parallel::install(|| {
+            (0..batch)
+                .into_par_iter()
+                .map(build_record)
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(PyValueError::new_err)?
     } else {
         (0..batch)
             .map(build_record)

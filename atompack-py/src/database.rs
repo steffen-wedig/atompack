@@ -93,10 +93,12 @@ impl PyAtomDatabase {
         let views = if use_mmap {
             let results: Vec<atompack::Result<SoaMoleculeView>> = py.detach(|| {
                 use rayon::prelude::*;
-                indices
-                    .par_iter()
-                    .map(|&idx| self.load_mmap_view(idx, compression, ctx))
-                    .collect()
+                atompack::parallel::install(|| {
+                    indices
+                        .par_iter()
+                        .map(|&idx| self.load_mmap_view(idx, compression, ctx))
+                        .collect()
+                })
             });
             results.into_iter().collect::<atompack::Result<Vec<_>>>()
         } else {

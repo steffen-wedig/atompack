@@ -23,7 +23,7 @@
 //! ```
 
 use crate::compression::{CompressionType, compress, decompress};
-use crate::{Error, Molecule, Result};
+use crate::{Error, Molecule, Result, parallel};
 use bytemuck::{Pod, Zeroable};
 use memmap2::Mmap;
 use rayon::prelude::*;
@@ -520,14 +520,16 @@ impl AtomDatabase {
     fn write_owned_records(&mut self, records: Vec<(Vec<u8>, u32)>) -> Result<()> {
         let compression = self.compression;
 
-        let compressed_records: Vec<(Vec<u8>, u32, u32)> = records
-            .into_par_iter()
-            .map(|(bytes, num_atoms)| {
-                let uncompressed_size = bytes.len() as u32;
-                let compressed = compress(&bytes, compression)?;
-                Ok((compressed, uncompressed_size, num_atoms))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let compressed_records: Vec<(Vec<u8>, u32, u32)> = parallel::install(|| {
+            records
+                .into_par_iter()
+                .map(|(bytes, num_atoms)| {
+                    let uncompressed_size = bytes.len() as u32;
+                    let compressed = compress(&bytes, compression)?;
+                    Ok((compressed, uncompressed_size, num_atoms))
+                })
+                .collect::<Result<Vec<_>>>()
+        })?;
 
         let mut file = OpenOptions::new().append(true).open(&self.path)?;
 
@@ -556,14 +558,16 @@ impl AtomDatabase {
     fn write_borrowed_records(&mut self, records: &[(&[u8], u32)]) -> Result<()> {
         let compression = self.compression;
 
-        let compressed_records: Vec<(Vec<u8>, u32, u32)> = records
-            .par_iter()
-            .map(|(bytes, num_atoms)| {
-                let uncompressed_size = bytes.len() as u32;
-                let compressed = compress(bytes, compression)?;
-                Ok((compressed, uncompressed_size, *num_atoms))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let compressed_records: Vec<(Vec<u8>, u32, u32)> = parallel::install(|| {
+            records
+                .par_iter()
+                .map(|(bytes, num_atoms)| {
+                    let uncompressed_size = bytes.len() as u32;
+                    let compressed = compress(bytes, compression)?;
+                    Ok((compressed, uncompressed_size, *num_atoms))
+                })
+                .collect::<Result<Vec<_>>>()
+        })?;
 
         let mut file = OpenOptions::new().append(true).open(&self.path)?;
 
@@ -612,14 +616,16 @@ impl AtomDatabase {
             self.record_format
         };
 
-        let serialized: Vec<(Vec<u8>, u32, SchemaLock)> = molecules
-            .par_iter()
-            .map(|mol| {
-                let bytes = serialize_molecule_soa(mol, target_format)?;
-                let num_atoms = mol.len() as u32;
-                Ok((bytes, num_atoms, schema_from_molecule(mol)?))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let serialized: Vec<(Vec<u8>, u32, SchemaLock)> = parallel::install(|| {
+            molecules
+                .par_iter()
+                .map(|mol| {
+                    let bytes = serialize_molecule_soa(mol, target_format)?;
+                    let num_atoms = mol.len() as u32;
+                    Ok((bytes, num_atoms, schema_from_molecule(mol)?))
+                })
+                .collect::<Result<Vec<_>>>()
+        })?;
 
         let mut batch_schema = SchemaLock::default();
         let mut records = Vec::with_capacity(serialized.len());
@@ -785,11 +791,13 @@ impl AtomDatabase {
     /// Read multiple molecules in parallel.
     pub fn get_molecules(&self, indices: &[usize]) -> Result<Vec<Molecule>> {
         let raw = self.get_raw_bytes(indices)?;
-        raw.into_par_iter()
-            .map(|bytes| {
-                deserialize_molecule_soa(&bytes, self.record_format, self.positions_type())
-            })
-            .collect()
+        parallel::install(|| {
+            raw.into_par_iter()
+                .map(|bytes| {
+                    deserialize_molecule_soa(&bytes, self.record_format, self.positions_type())
+                })
+                .collect()
+        })
     }
 
     /// Atom count for a molecule (from the index, no I/O).
@@ -825,6 +833,10 @@ impl AtomDatabase {
 
     /// Decompress multiple records in parallel (mmap or per-thread file handles).
     fn decompress_entries_parallel(&self, entries: &[MoleculeIndex]) -> Result<Vec<Vec<u8>>> {
+        parallel::install(|| self.decompress_entries_on_pool(entries))
+    }
+
+    fn decompress_entries_on_pool(&self, entries: &[MoleculeIndex]) -> Result<Vec<Vec<u8>>> {
         let compression = self.compression;
 
         if let Some(ref mmap) = self.data_mmap {
