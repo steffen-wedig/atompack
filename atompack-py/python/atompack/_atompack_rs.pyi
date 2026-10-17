@@ -434,6 +434,9 @@ class PyAtomDatabase:
             If False, load the index into memory and allow writes.
         populate : bool, default=False
             Only valid when ``mmap=True``. Prefaults mapped pages on Linux.
+
+        Read-only handles are picklable; unpickling reopens the same file by
+        absolute path. Writable handles raise ``TypeError`` when pickled.
         """
         ...
 

@@ -162,5 +162,6 @@ fn _atompack_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<database::groups::PyGrouping>()?;
     m.add_class::<database::groups::PyGroup>()?;
     m.add_function(pyo3::wrap_pyfunction!(_molecule_from_pickle_bytes, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(database::_database_from_pickle, m)?)?;
     Ok(())
 }

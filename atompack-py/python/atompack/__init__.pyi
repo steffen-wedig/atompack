@@ -492,6 +492,11 @@ class Database:
         By default this uses a memory-mapped index and is read-only. Pass
         `mmap=False` to reopen the database for appends.
 
+        Read-only handles can be pickled, e.g. to send them to DataLoader
+        workers started with `spawn`. Unpickling reopens the same file by
+        absolute path instead of copying data. Writable handles cannot be
+        pickled.
+
         Parameters
         ----------
         path : str

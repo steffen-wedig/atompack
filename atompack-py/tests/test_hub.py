@@ -415,6 +415,21 @@ def test_open_path_directory_flattens_lexicographically(tmp_path: Path) -> None:
     assert [reader[i].energy for i in range(len(reader))] == pytest.approx([-1.0, -2.0, -3.0])
 
 
+def test_open_path_reader_pickle_reopens_shards(tmp_path: Path) -> None:
+    import pickle
+
+    shard_dir = tmp_path / "shards"
+    shard_dir.mkdir()
+    _make_db(shard_dir / "a.atp", [-1.0, -2.0])
+    _make_db(shard_dir / "b.atp", [-3.0])
+
+    restored = pickle.loads(pickle.dumps(atompack.hub.open_path(shard_dir)))
+
+    assert len(restored) == 3
+    energies = [mol.energy for mol in restored.get_molecules([2, 0, 1])]
+    assert energies == pytest.approx([-3.0, -1.0, -2.0])
+
+
 def test_open_path_context_manager_closes_reader(tmp_path: Path) -> None:
     source = tmp_path / "single.atp"
     _make_db(source, [-1.0])

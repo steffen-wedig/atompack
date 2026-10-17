@@ -762,6 +762,63 @@ def test_database_single_item_pickle_materializes_owned_roundtrip(
     assert fresh.get_property("tag") == "train"
 
 
+def _len_and_energies(db: atompack.Database) -> tuple[int, list[float]]:
+    return len(db), [db[i].energy for i in range(len(db))]
+
+
+@pytest.mark.parametrize("populate", [False, True])
+@pytest.mark.parametrize("compression", ["none", "zstd"])
+def test_database_pickle_reopens_read_only_handle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    populate: bool,
+    compression: str,
+) -> None:
+    db = atompack.Database(str(tmp_path / "data.atp"), compression=compression)
+    db.add_molecules([_make_molecule(-1.0), _make_molecule(-2.0)])
+    db.flush()
+
+    # Open by relative path, then unpickle from another directory.
+    monkeypatch.chdir(tmp_path)
+    reopened = atompack.Database.open("data.atp", populate=populate)
+    payload = pickle.dumps(reopened)
+    monkeypatch.chdir(tmp_path.parent)
+    restored = pickle.loads(payload)
+
+    assert isinstance(restored, atompack.Database)
+    assert _len_and_energies(restored) == (2, [-1.0, -2.0])
+    flat = restored.get_molecules_flat([1, 0])
+    np.testing.assert_allclose(flat["energy"], [-2.0, -1.0])
+    with pytest.raises(ValueError, match="read-only"):
+        restored.flush()
+
+
+@pytest.mark.parametrize("writable", ["new", "open_no_mmap"])
+def test_database_pickle_rejects_writable_handle(tmp_path: Path, writable: str) -> None:
+    path = tmp_path / "data.atp"
+    db = atompack.Database(str(path))
+    db.add_molecule(_make_molecule(-1.0))
+    db.flush()
+    if writable == "open_no_mmap":
+        db = atompack.Database.open(str(path), mmap=False)
+
+    with pytest.raises(TypeError, match="cannot pickle a writable Database"):
+        pickle.dumps(db)
+
+
+def test_database_pickle_in_spawned_process(tmp_path: Path) -> None:
+    import multiprocessing as mp
+
+    path = tmp_path / "data.atp"
+    db = atompack.Database(str(path))
+    db.add_molecules([_make_molecule(-1.0), _make_molecule(-2.0)])
+    db.flush()
+
+    reopened = atompack.Database.open(str(path))
+    with mp.get_context("spawn").Pool(1) as pool:
+        assert pool.apply(_len_and_energies, (reopened,)) == (2, [-1.0, -2.0])
+
+
 def test_database_init_refuses_existing_path_by_default(tmp_path: Path) -> None:
     path = tmp_path / "existing.atp"
     db = atompack.Database(str(path))

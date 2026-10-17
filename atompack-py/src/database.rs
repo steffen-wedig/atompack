@@ -10,6 +10,26 @@ pub(crate) mod groups;
 #[pyclass]
 pub(crate) struct PyAtomDatabase {
     inner: AtomDatabase,
+    /// How to reopen this handle when unpickled. Only read-only (mmap)
+    /// handles are picklable; writable handles keep `None`.
+    reopen: Option<ReopenArgs>,
+}
+
+/// `Database.open` arguments for a read-only handle, with an absolute path so
+/// the reopened handle resolves the same file from another working directory.
+struct ReopenArgs {
+    path: String,
+    populate: bool,
+}
+
+impl ReopenArgs {
+    fn new(path: &str, populate: bool) -> Self {
+        let path = std::path::absolute(path)
+            .ok()
+            .and_then(|abs| abs.into_os_string().into_string().ok())
+            .unwrap_or_else(|| path.to_string());
+        Self { path, populate }
+    }
 }
 
 impl PyAtomDatabase {
@@ -95,6 +115,12 @@ impl PyAtomDatabase {
     }
 }
 
+/// Unpickle target for `PyAtomDatabase.__reduce__`: reopen read-only.
+#[pyfunction]
+pub(crate) fn _database_from_pickle(path: String, populate: bool) -> PyResult<PyAtomDatabase> {
+    PyAtomDatabase::open(path, true, populate)
+}
+
 #[pymethods]
 impl PyAtomDatabase {
     /// Create a new database
@@ -124,7 +150,10 @@ impl PyAtomDatabase {
         let db = AtomDatabase::create(&path_buf, compression_type)
             .map_err(|e| PyValueError::new_err(format!("{}", e)))?;
 
-        Ok(Self { inner: db })
+        Ok(Self {
+            inner: db,
+            reopen: None,
+        })
     }
 
     /// Open an existing database.
@@ -140,15 +169,37 @@ impl PyAtomDatabase {
 
         let db = if mmap {
             if populate {
-                AtomDatabase::open_mmap_populate(PathBuf::from(path))
+                AtomDatabase::open_mmap_populate(PathBuf::from(&path))
             } else {
-                AtomDatabase::open_mmap(PathBuf::from(path))
+                AtomDatabase::open_mmap(PathBuf::from(&path))
             }
         } else {
-            AtomDatabase::open(PathBuf::from(path))
+            AtomDatabase::open(PathBuf::from(&path))
         }
         .map_err(|e| PyValueError::new_err(format!("{}", e)))?;
-        Ok(Self { inner: db })
+        let reopen = mmap.then(|| ReopenArgs::new(&path, populate));
+        Ok(Self { inner: db, reopen })
+    }
+
+    /// Pickle a read-only handle as `Database.open(path, mmap=True, populate)`.
+    ///
+    /// Unpickling reopens the file instead of copying data, which lets
+    /// DataLoader workers started with `spawn` or `forkserver` receive an open
+    /// database. Writable handles are rejected: a copy would be a second
+    /// writer on the same file, and unflushed records would not carry over.
+    fn __reduce__<'py>(slf: Bound<'py, Self>) -> PyResult<Py<PyAny>> {
+        let py = slf.py();
+        let this = slf.borrow();
+        let reopen = this.reopen.as_ref().ok_or_else(|| {
+            PyTypeError::new_err(
+                "cannot pickle a writable Database; flush it and pickle Database.open(path) instead",
+            )
+        })?;
+        let constructor = py
+            .import("atompack._atompack_rs")?
+            .getattr("_database_from_pickle")?;
+        let args = (reopen.path.as_str(), reopen.populate);
+        (constructor, args).into_py_any(py)
     }
 
     /// Add a molecule to the database
